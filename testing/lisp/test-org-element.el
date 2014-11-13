@@ -1388,17 +1388,22 @@ e^{i\\pi}+1=0
     (org-test-with-temp-text "[[file:projects.org::*task title]]"
       (org-element-map (org-element-parse-buffer) 'link
 	(lambda (l) (list (org-element-property :type l)
-		     (org-element-property :path l)
-		     (org-element-property :search-option l)))))))
-  ;; ... file-type link with application.
+			  (org-element-property :path l)
+			  (org-element-property :search-option l)))))))
+  ;; ... file-type link with application...
   (should
    (equal
-    '(("file" "projects.org" "docview"))
+    '("file" "projects.org" "docview")
     (org-test-with-temp-text "[[docview:projects.org]]"
-      (org-element-map (org-element-parse-buffer) 'link
-	(lambda (l) (list (org-element-property :type l)
-		     (org-element-property :path l)
-		     (org-element-property :application l)))))))
+      (let ((l (org-element-context)))
+	(list (org-element-property :type l)
+	      (org-element-property :path l)
+	      (org-element-property :application l))))))
+  ;; ... multi-line link.
+  (should
+   (equal "//orgmode.org"
+	  (org-test-with-temp-text "[[http://orgmode.\norg]]"
+	    (org-element-property :path (org-element-context)))))
   ;; Plain link.
   (should
    (org-test-with-temp-text "A link: http://orgmode.org"
@@ -1474,23 +1479,37 @@ e^{i\\pi}+1=0
   ;; Standard test.
   (should
    (equal '("abc" "value")
-	  (org-test-with-temp-text ":PROPERTIES:\n:abc: value\n:END:"
-	    (progn (forward-line)
-		   (let ((element (org-element-at-point)))
-		     (list (org-element-property :key element)
-			   (org-element-property :value element)))))))
+	  (org-test-with-temp-text ":PROPERTIES:\n<point>:abc: value\n:END:"
+	    (let ((element (org-element-at-point)))
+	      (list (org-element-property :key element)
+		    (org-element-property :value element))))))
   ;; Value should be trimmed.
   (should
    (equal "value"
-	  (org-test-with-temp-text ":PROPERTIES:\n:abc: value  \n:END:"
-	    (progn (forward-line)
-		   (let ((element (org-element-at-point)))
-		     (org-element-property :value element))))))
+	  (org-test-with-temp-text ":PROPERTIES:\n<point>:abc: value  \n:END:"
+	    (org-element-property :value (org-element-at-point)))))
   ;; A node property requires to be wrapped within a property drawer.
   (should-not
    (eq 'node-property
        (org-test-with-temp-text ":abc: value"
-	 (org-element-type (org-element-at-point))))))
+	 (org-element-type (org-element-at-point)))))
+  ;; Accept empty properties.
+  (should
+   (equal '(("foo" "value") ("bar" ""))
+	  (org-test-with-temp-text ":PROPERTIES:\n:foo: value\n:bar:\n:END:"
+	    (org-element-map (org-element-parse-buffer) 'node-property
+	      (lambda (p)
+		(list (org-element-property :key p)
+		      (org-element-property :value p)))))))
+  ;; Ignore all non-property lines in property drawers.
+  (should
+   (equal
+    '(("foo" "value"))
+    (org-test-with-temp-text ":PROPERTIES:\nWrong1\n:foo: value\nWrong2\n:END:"
+      (org-element-map (org-element-parse-buffer) 'node-property
+	(lambda (p)
+	  (list (org-element-property :key p)
+		(org-element-property :value p))))))))
 
 
 ;;;; Paragraph
@@ -2204,7 +2223,12 @@ Outside list"
   (should
    (equal (org-test-parse-and-interpret
 	   "* Headline\n\n\nText after two blank lines.")
-	  "* Headline\n\n\nText after two blank lines.\n")))
+	  "* Headline\n\n\nText after two blank lines.\n"))
+  ;; 8. Preserve `org-odd-levels-only' state.
+  (should
+   (equal "* H\n*** H2\n"
+	  (let ((org-odd-levels-only t))
+	    (org-test-parse-and-interpret "* H\n*** H2")))))
 
 (ert-deftest test-org-element/inlinetask-interpreter ()
   "Test inlinetask interpretation."
@@ -2789,47 +2813,57 @@ Paragraph \\alpha."
 
 (ert-deftest test-org-element/secondary-string-parsing ()
   "Test if granularity correctly toggles secondary strings parsing."
-  ;; 1. With a granularity bigger than `object', no secondary string
-  ;;    should be parsed.
-  ;;
-  ;; 1.1. Test with `headline' type.
-  (org-test-with-temp-text "* Headline"
-    (let ((headline
-	   (org-element-map (org-element-parse-buffer 'headline) 'headline
-			    'identity
-			    nil
-			    'first-match)))
-      (should (stringp (org-element-property :title headline)))))
-  ;; 1.2. Test with `item' type.
-  (org-test-with-temp-text "* Headline\n- tag :: item"
-    (let ((item (org-element-map (org-element-parse-buffer 'element)
-				 'item
-				 'identity
-				 nil
-				 'first-match)))
-      (should (stringp (org-element-property :tag item)))))
-  ;; 1.3. Test with `inlinetask' type, if avalaible.
+  ;; With a granularity bigger than `object', no secondary string
+  ;; should be parsed.
+  (should
+   (stringp
+    (org-test-with-temp-text "* Headline"
+      (let ((headline
+	     (org-element-map (org-element-parse-buffer 'headline) 'headline
+	       #'identity nil 'first-match)))
+	(org-element-property :title headline)))))
+  (should
+   (stringp
+    (org-test-with-temp-text "* Headline\n- tag :: item"
+      (let ((item (org-element-map (org-element-parse-buffer 'element) 'item
+		    #'identity nil 'first-match)))
+	(org-element-property :tag item)))))
   (when (featurep 'org-inlinetask)
-    (let ((org-inlinetask-min-level 15))
-      (org-test-with-temp-text "*************** Inlinetask"
-	(let ((inlinetask (org-element-map (org-element-parse-buffer 'element)
-					   'inlinetask
-					   'identity
-					   nil
-					   'first-match)))
-	  (should (stringp (org-element-property :title inlinetask)))))))
-  ;; 2. With a default granularity, secondary strings should be
-  ;;    parsed.
-  (org-test-with-temp-text "* Headline"
-    (let ((headline
-	   (org-element-map (org-element-parse-buffer) 'headline
-			    'identity
-			    nil
-			    'first-match)))
-      (should (listp (org-element-property :title headline)))))
-  ;; 3. `org-element-at-point' should never parse a secondary string.
-  (org-test-with-temp-text "* Headline"
-    (should (stringp (org-element-property :title (org-element-at-point))))))
+    (should
+     (stringp
+      (let ((org-inlinetask-min-level 15))
+	(org-test-with-temp-text "*************** Inlinetask"
+	  (let ((inlinetask (org-element-map (org-element-parse-buffer 'element)
+				'inlinetask
+			      #'identity nil 'first-match)))
+	    (org-element-property :title inlinetask)))))))
+  ;; With a default granularity, secondary strings should be parsed.
+  (should
+   (listp
+    (org-test-with-temp-text "* Headline"
+      (let ((headline
+	     (org-element-map (org-element-parse-buffer) 'headline
+	       #'identity nil 'first-match)))
+	(org-element-property :title headline)))))
+  ;; `org-element-at-point' should never parse a secondary string.
+  (should-not
+   (listp
+    (org-test-with-temp-text "* Headline"
+      (org-element-property :title (org-element-at-point)))))
+  ;; Preserve current local variables when parsing a secondary string.
+  (should
+   (let ((org-entities nil)
+	 (org-entities-user nil))
+     (org-test-with-temp-text "
+#+CAPTION: \\foo
+Text
+# Local Variables:
+# org-entities-user: ((\"foo\"))
+# End:"
+       (let ((safe-local-variable-values '((org-entities-user . (("foo"))))))
+	 (hack-local-variables))
+       (org-element-map (org-element-parse-buffer) 'entity
+	 #'identity nil nil nil t)))))
 
 
 
@@ -2908,6 +2942,11 @@ Paragraph \\alpha."
     '(paragraph nil " Two spaces\n" (verbatim nil "V") "\n Two spaces")
     (org-element-normalize-contents
      '(paragraph nil "  Two spaces\n " (verbatim nil "V") "\n  Two spaces"))))
+  (should
+   (equal
+    '(verse-block nil "line 1\n\nline 2")
+    (org-element-normalize-contents
+     '(verse-block nil "  line 1\n\n  line 2"))))
   ;; Recursively enter objects in order to compute common indentation.
   (should
    (equal
