@@ -71,12 +71,14 @@
 	   (page (string-to-number (match-string 2 link))))
       (org-open-file path 1) ;; let org-mode open the file (in-emacs = 1)
       ;; to ensure org-link-frame-setup is respected
-      (doc-view-goto-page page)
+      (cond ((eq major-mode 'doc-view-mode) (doc-view-goto-page page))
+	    ((major-mode 'pdf-view-mode) (pdf-view-goto-page page)))
       )))
 
 (defun org-docview-store-link ()
   "Store a link to a docview buffer."
-  (when (eq major-mode 'doc-view-mode)
+  (when (or (eq major-mode 'doc-view-mode)
+	    (eq major-mode 'pdf-view-mode))
     ;; This buffer is in doc-view-mode
     (let* ((path buffer-file-name)
 	   (page (image-mode-window-get 'page))
